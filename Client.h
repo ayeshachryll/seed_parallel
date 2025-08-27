@@ -59,6 +59,7 @@ private:
     std::map<int, FileInfo> available_files;
     std::map<int, DownloadInfo> current_downloads;
     std::mutex files_mutex;
+    std::mutex file_write_mutex;
     void print_menu();
     void list_available_files();
     struct RequestArgs

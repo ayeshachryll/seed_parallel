@@ -47,17 +47,16 @@ void *Server::accept_thread()
     socklen_t addrlen = sizeof(addr);
     while (1)
     {
-        int client_socket = accept(listen_fd, (struct sockaddr *)&addr, &addrlen);
-        if (client_socket < 0)
+        int *client_socket = new int(accept(listen_fd, (struct sockaddr *)&addr, &addrlen));
+        if (*client_socket < 0)
         {
             perror("Accept failed");
             continue;
         }
         else
         {
-            int *fd_ptr = new int(client_socket);
             pthread_t handler;
-            pthread_create(&handler, nullptr, handle_client_thread_helper, new AcceptArgs{fd_ptr, this});
+            pthread_create(&handler, nullptr, handle_client_thread_helper, new AcceptArgs{client_socket, this});
             pthread_detach(handler);
         }
     }

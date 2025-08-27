@@ -191,8 +191,6 @@ void Client::download_file()
             return;
         }
         fseek(shared_file, file_size - 1, SEEK_SET);
-        fputc(0, shared_file);
-        fflush(shared_file);
         current_downloads[file_id] = {filename, file_size, 0};
         int num_chunks = file_size / 32 + (file_size % 32 != 0 ? 1 : 0);
         int num_ports = available_ports.size();
@@ -284,22 +282,24 @@ void *Client::download_from_specific_port(PortDownloadInfo *port_info)
             }
             current_position += n;
         }
-        fseek(port_info->file_ptr, chunk.start_byte, SEEK_SET);
-        long bytes_read = 0;
-        while (bytes_read < chunk.chunk_size)
         {
-            long to_read = std::min(32L, chunk.chunk_size - bytes_read);
-            ssize_t n = recv(sock, buffer, to_read, 0);
-            if (n <= 0)
-                break;
-            fwrite(buffer, 1, n, port_info->file_ptr);
-            fflush(port_info->file_ptr);
-            bytes_read += n;
-            current_position += n;
-            sleep(10);
+            std::lock_guard<std::mutex> file_lock(file_write_mutex);
+            fseek(port_info->file_ptr, chunk.start_byte, SEEK_SET);
+            long bytes_read = 0;
+            while (bytes_read < chunk.chunk_size)
             {
-                std::lock_guard<std::mutex> lock(files_mutex);
-                current_downloads[port_info->file_id].bytes_downloaded += n;
+                long to_read = std::min(32L, chunk.chunk_size - bytes_read);
+                ssize_t n = recv(sock, buffer, to_read, 0);
+                if (n <= 0)
+                    break;
+                fwrite(buffer, 1, n, port_info->file_ptr);
+                fflush(port_info->file_ptr);
+                bytes_read += n;
+                current_position += n;
+                {
+                    std::lock_guard<std::mutex> lock(files_mutex);
+                    current_downloads[port_info->file_id].bytes_downloaded += n;
+                }
             }
         }
     }
@@ -428,7 +428,7 @@ void Client::cleanup_completed_downloads()
         }
         else
         {
-            ++it;
+            it++;
         }
     }
 }
