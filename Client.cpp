@@ -263,45 +263,41 @@ void *Client::download_from_specific_port(PortDownloadInfo *port_info)
         delete port_info;
         return nullptr;
     }
-    std::string request = "DOWNLOAD " + std::to_string(port_info->file_id);
-    send(sock, request.c_str(), request.size(), 0);
     char buffer[32];
-    long current_position = 0;
+    std::string file_path = "files/" + std::to_string(port_info->file_id) + "/" + port_info->filename;
     for (const auto &chunk : port_info->chunks)
     {
-        while (current_position < chunk.start_byte)
+        std::string request = "DOWNLOAD " + std::to_string(chunk.file_id) + " " + std::to_string(chunk.start_byte) + " " + std::to_string(chunk.chunk_size) + "\n";
+        ssize_t sent = send(sock, request.c_str(), request.size(), 0);
+        if (sent < 0)
         {
-            long skip_bytes = chunk.start_byte - current_position;
-            long to_read = std::min(32L, skip_bytes);
+            continue;
+        }
+        long bytes_received = 0;
+        FILE *file = fopen(file_path.c_str(), "r+b");
+        if (!file)
+        {
+            continue;
+        }
+
+        fseek(file, chunk.start_byte, SEEK_SET);
+        while (bytes_received < chunk.chunk_size)
+        {
+            long to_read = std::min(32L, chunk.chunk_size - bytes_received);
             ssize_t n = recv(sock, buffer, to_read, 0);
             if (n <= 0)
             {
-                close(sock);
-                delete port_info;
-                return nullptr;
+                break;
             }
-            current_position += n;
-        }
-        {
-            std::lock_guard<std::mutex> file_lock(file_write_mutex);
-            fseek(port_info->file_ptr, chunk.start_byte, SEEK_SET);
-            long bytes_read = 0;
-            while (bytes_read < chunk.chunk_size)
+            fwrite(buffer, 1, n, file);
+            fflush(file);
+            bytes_received += n;
             {
-                long to_read = std::min(32L, chunk.chunk_size - bytes_read);
-                ssize_t n = recv(sock, buffer, to_read, 0);
-                if (n <= 0)
-                    break;
-                fwrite(buffer, 1, n, port_info->file_ptr);
-                fflush(port_info->file_ptr);
-                bytes_read += n;
-                current_position += n;
-                {
-                    std::lock_guard<std::mutex> lock(files_mutex);
-                    current_downloads[port_info->file_id].bytes_downloaded += n;
-                }
+                std::lock_guard<std::mutex> lock(files_mutex);
+                current_downloads[port_info->file_id].bytes_downloaded += n;
             }
         }
+        fclose(file);
     }
     close(sock);
     delete port_info;

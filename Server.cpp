@@ -75,67 +75,88 @@ void *Server::handle_client_thread(int *client_fd_ptr)
 {
     int client_fd = *client_fd_ptr;
     delete client_fd_ptr;
-    char buffer[1024];
-    ssize_t bytes = recv(client_fd, buffer, sizeof(buffer), 0);
-    if (bytes <= 0)
+
+    while (1)
     {
-        close(client_fd);
-        return nullptr;
-    }
-    buffer[bytes] = '\0';
-    std::string request(buffer);
-    if (request == "LIST")
-    {
-        auto files = list_files();
-        std::string response;
-        for (auto &f : files)
+        char buffer[1024];
+        ssize_t bytes = recv(client_fd, buffer, sizeof(buffer), 0);
+        if (bytes <= 0)
         {
-            response += "[" + std::to_string(f.first) + "] " + f.second.filename + " - " + std::to_string(f.second.size) + " bytes\n";
-        }
-        send(client_fd, response.c_str(), response.size(), 0);
-    }
-    else if (request.find("DOWNLOAD ") != std::string::npos)
-    {
-        std::string file_id = request.substr(9);
-        std::string file_path = directory_path + "/" + file_id;
-        DIR *dir = opendir(file_path.c_str());
-        if (dir == NULL)
-        {
-            perror("Error opening directory");
-            exit(EXIT_FAILURE);
-        }
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL)
-        {
-            std::string name = entry->d_name;
-            if (name == "." || name == "..")
-                continue;
-            if (entry->d_type == DT_REG)
-            {
-                file_path += "/" + name;
-                break;
-            }
-        }
-        closedir(dir);
-        FILE *file = fopen(file_path.c_str(), "rb");
-        if (!file)
-        {
-            std::cerr << "Failed to open file\n";
             close(client_fd);
             return nullptr;
         }
-        char buffer_file[32];
-        size_t bytes_read;
-        while ((bytes_read = fread(buffer_file, 1, 32, file)) > 0)
+        buffer[bytes] = '\0';
+        std::string request(buffer);
+        if (request == "LIST")
         {
-            if (send(client_fd, buffer_file, bytes_read, 0) == -1)
+            auto files = list_files();
+            std::string response;
+            for (auto &f : files)
             {
-                perror("Error sending file");
+                response += "[" + std::to_string(f.first) + "] " + f.second.filename + " - " + std::to_string(f.second.size) + " bytes\n";
+            }
+            send(client_fd, response.c_str(), response.size(), 0);
+        }
+        else if (request.find("DOWNLOAD ") != std::string::npos)
+        {
+            std::istringstream iss(request);
+            std::string cmd;
+            int file_id;
+            long start_byte, chunk_size;
+            iss >> cmd >> file_id >> start_byte >> chunk_size;
+            std::string file_dir = directory_path + "/" + std::to_string(file_id);
+            DIR *dir = opendir(file_dir.c_str());
+            std::string file_path;
+
+            if (dir == NULL)
+            {
+                perror("Error opening directory");
                 break;
             }
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL)
+            {
+                std::string name = entry->d_name;
+                if (name == "." || name == "..")
+                    continue;
+                if (entry->d_type == DT_REG)
+                {
+                    file_path = file_dir + "/" + name;
+                    break;
+                }
+            }
+            closedir(dir);
+            if (file_path.empty())
+            {
+                std::cerr << "File not found in directory\n";
+                break;
+            }
+            FILE *file = fopen(file_path.c_str(), "rb");
+            if (!file)
+            {
+                std::cerr << "Failed to open file\n";
+                break;
+            }
+            fseek(file, start_byte, SEEK_SET);
+            char buffer_file[32];
+            long bytes_left = chunk_size;
+            while (bytes_left > 0)
+            {
+                size_t to_read = std::min(32L, bytes_left);
+                size_t bytes_read = fread(buffer_file, 1, to_read, file);
+                if (bytes_read == 0)
+                    break;
+                if (send(client_fd, buffer_file, bytes_read, 0) == -1)
+                {
+                    perror("Error sending file chunk");
+                    break;
+                }
+                bytes_left -= bytes_read;
+            }
+            fclose(file);
         }
-        fclose(file);
     }
+
     close(client_fd);
     return nullptr;
 }
